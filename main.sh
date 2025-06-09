@@ -1,12 +1,12 @@
 #!/bin/bash
 
-eval_mode=3
-if_hierarchical=5
-num_hierarchy=1
-locam_minimum_threshold=3
+eval_mode=0
+if_hierarchical=1
+num_hierarchy=5
+locam_minimum_threshold=2
 
 beam_compare_mode=0
-beam_size_branching=3
+beam_size_branching=2
 num_init_for_EU=3
 num_recom_trial_for_better_hyp=2
 if_feedback=1
@@ -16,8 +16,8 @@ if_use_vague_cg_hyp_as_input=1
 
 # gpt-4o
 # gpt-4o-mini
-model_name=gpt-4o
-eval_model_name=gpt-4o
+model_name=gpt-4o-mini
+eval_model_name=gpt-4o-mini
 api_key=sk-
 # only used by hierarchical greedy
 eval_api_key=sk-
