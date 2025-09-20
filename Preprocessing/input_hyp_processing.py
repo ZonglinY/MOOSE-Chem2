@@ -1,5 +1,6 @@
 import os, sys, argparse, json, re
 from openai import OpenAI, AzureOpenAI
+from google import genai
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from Method.utils import load_chem_annotation, preprocessing_instruction_prompts, llm_generation_while_loop
 
@@ -21,11 +22,25 @@ def process_note(input_string):
     return processed_parts
 
 
-def process_coarse_grained_hypothesis(input_file_path, output_file_path, api_key, base_url, model_name):
+def process_coarse_grained_hypothesis(input_file_path, output_file_path, api_type, api_key, base_url, model_name):
     # obtain groundtruth finegrained hypothesis and experiment
     bkg_q_list, dict_bkg2survey, dict_bkg2cg_hyp, dict_bkg2fg_hyp, dict_bkg2fg_exp, dict_bkg2note = load_chem_annotation(input_file_path)  
-    # prepare API client
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    # Set API client
+    # openai client
+    if api_type == 0:
+        client = OpenAI(api_key=api_key, base_url=base_url)
+    # azure client
+    elif api_type == 1:
+        client = AzureOpenAI(
+            azure_endpoint = base_url, 
+            api_key=api_key,  
+            api_version="2024-06-01"
+        )
+    # google client
+    elif api_type == 2:
+        client = genai.Client(api_key=api_key)
+    else:
+        raise NotImplementedError
 
     prompts = preprocessing_instruction_prompts("preprocess_cg_hyp_to_research_direction")
     refine_prompts = preprocessing_instruction_prompts("preprocess_cg_hyp_to_research_direction_refine")
@@ -71,11 +86,12 @@ def process_coarse_grained_hypothesis(input_file_path, output_file_path, api_key
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--api_type", type=int, default=0, help="0: openai's API toolkit; 1: azure's API toolkit; 2: Gemini")
     parser.add_argument("--api_key", type=str, default="")
-    parser.add_argument("--base_url", type=str, default="https://api.claudeshop.top/v1", help="base url for the API")
+    parser.add_argument("--base_url", type=str, default="", help="base url for the API")
     parser.add_argument("--model_name", type=str, default="gpt-4o")
     parser.add_argument("--chem_annotation_path", type=str, default="./Data/chem_research_2024_finegrained.xlsx", help="store annotated background research questions and their annotated groundtruth inspiration paper titles")
     parser.add_argument("--output_dir", type=str, required=True, help="The path to the output file.")
     args = parser.parse_args()
     
-    process_coarse_grained_hypothesis(args.chem_annotation_path, args.output_dir, args.api_key, args.base_url, args.model_name)
+    process_coarse_grained_hypothesis(args.chem_annotation_path, args.output_dir, args.api_type, args.api_key, args.base_url, args.model_name)

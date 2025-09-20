@@ -10,9 +10,10 @@
 function_mode=3
 custom_research_background_and_coarse_hyp_path=./custom_research_background_and_coarse_hyp.json
 
-# gpt-4o & gpt-4o-mini & claude-3-haiku-20240307
 model_name=gpt-4o-mini
 eval_model_name=gpt-4o-mini
+# api_type: 0: OpenAI; 1: Azure; 2: Gemini
+api_type=
 api_key=
 eval_api_key=
 base_url=
@@ -43,7 +44,7 @@ if [[ ${function_mode} -eq 0 ]]; then
     if [[ ${if_hierarchical} -eq 0 ]]; then
         python -u ./Method/greedy.py \
             --bkg_id ${bkg_id} \
-            --api_type 0 --api_key ${api_key} --eval_api_key ${eval_api_key} --base_url ${base_url} \
+            --api_type ${api_type} --api_key ${api_key} --eval_api_key ${eval_api_key} --base_url ${base_url} \
             --model_name ${model_name} --eval_model_name ${eval_model_name} \
             --output_dir ./Checkpoints/greedy_${locam_minimum_threshold}_${if_feedback}_${model_name}_${eval_model_name}_if_multiple_llm_${if_multiple_llm}_if_use_vague_cg_hyp_as_input_${if_use_vague_cg_hyp_as_input}_if_generate_with_past_failed_hyp_${if_generate_with_past_failed_hyp}_bkgid_${bkg_id}_${output_dir_postfix}.json \
             --if_save 1 \
@@ -55,7 +56,7 @@ if [[ ${function_mode} -eq 0 ]]; then
     elif [[ ${if_hierarchical} -eq 1 ]]; then
         python -u ./Method/hierarchy_greedy.py \
             --bkg_id ${bkg_id} \
-            --api_type 0 --api_key ${api_key} --eval_api_key ${eval_api_key} --base_url ${base_url} \
+            --api_type ${api_type} --api_key ${api_key} --eval_api_key ${eval_api_key} --base_url ${base_url} \
             --model_name ${model_name} --eval_model_name ${eval_model_name} \
             --output_dir ./Checkpoints/hierarchical_greedy_${num_hierarchy}_${locam_minimum_threshold}_${if_feedback}_${num_recom_trial_for_better_hyp}_${model_name}_${eval_model_name}_beam_compare_mode_${beam_compare_mode}_beam_size_branching_${beam_size_branching}_num_init_for_EU_${num_init_for_EU}_if_multiple_llm_${if_multiple_llm}_if_use_vague_cg_hyp_as_input_${if_use_vague_cg_hyp_as_input}_if_generate_with_past_failed_hyp_${if_generate_with_past_failed_hyp}_bkgid_${bkg_id}_${output_dir_postfix}.pkl \
             --if_save 1 \
@@ -69,21 +70,21 @@ if [[ ${function_mode} -eq 0 ]]; then
     fi
 elif [[ ${function_mode} -eq 1 ]]; then
     ## compare a pair of manually set hypotheses for simple testing
-    python -u ./Evaluation/pairwise_compare.py --model_name ${model_name} --api_type 0 --api_key ${api_key} --base_url ${base_url} \
+    python -u ./Evaluation/pairwise_compare.py --model_name ${model_name} --api_type ${api_type} --api_key ${api_key} --base_url ${base_url} \
         --eval_example_path ./Checkpoints/Backup/eval_example.json
 elif [[ ${function_mode} -eq 2 ]]; then
     ## evaluate the generated hypotheses with the ground truth
-    python -u ./Evaluation/evaluate.py --model_name ${model_name} --api_type 0 --api_key ${api_key} --base_url ${base_url} \
+    python -u ./Evaluation/evaluate.py --model_name ${model_name} --api_type ${api_type} --api_key ${api_key} --base_url ${base_url} \
         --preprocess_groundtruth_components_dir ./Checkpoints/groundtruth_hyp_components_collection.json \
         --num_compare_times 5
 elif [[ ${function_mode} -eq 3 ]]; then
     ## analysis
     # --model_name ${model_name}
-    python -u ./Evaluation/analysis.py --api_type 0 --api_key ${api_key} --base_url ${base_url} \
+    python -u ./Evaluation/analysis.py --api_type ${api_type} --api_key ${api_key} --base_url ${base_url} \
         --preprocess_groundtruth_components_dir ./Checkpoints/groundtruth_hyp_components_collection.json
 elif [[ ${function_mode} -eq 4 ]]; then
     ## preprocess coarse-grained ground truth hypothesis
-    python -u ./Preprocessing/input_hyp_processing.py --model_name ${model_name} --api_key ${api_key} --base_url ${base_url} \
+    python -u ./Preprocessing/input_hyp_processing.py --model_name ${model_name} --api_type ${api_type} --api_key ${api_key} --base_url ${base_url} \
         --output_dir ./Data/processed_research_direction.json
 elif [[ ${function_mode} -eq 5 ]]; then
     ## dump custom research background and coarse hypothesis

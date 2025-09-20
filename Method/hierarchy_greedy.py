@@ -571,7 +571,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Greedy search for fine-grained hypothesis generation')
     parser.add_argument("--model_name", type=str, default="gpt-4o", help="model name: gpt-4o/chatgpt/chatgpt16k/claude35S/gemini15P/llama318b/llama3170b/llama31405b")
     parser.add_argument("--eval_model_name", type=str, default="gpt-4o", help="model name for evaluation: gpt-4o/chatgpt/chatgpt16k/claude35S/gemini15P/llama318b/llama3170b/llama31405b")
-    parser.add_argument("--api_type", type=int, default=0, help="0: openai's API toolkit; 1: azure's API toolkit")
+    parser.add_argument("--api_type", type=int, default=0, help="0: openai's API toolkit; 1: azure's API toolkit; 2: Gemini")
     parser.add_argument("--api_key", type=str, default="")
     parser.add_argument("--eval_api_key", type=str, default="")
     parser.add_argument("--base_url", type=str, default="", help="base url for the API")

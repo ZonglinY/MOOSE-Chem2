@@ -27,6 +27,7 @@ pip install -r requirements.txt
 
 Open `main.sh` and set the following:
 
+- `api_type` (0: OpenAI; 1: Azure; 2: Gemini)
 - `api_key`
 - `eval_api_key` (can be the same as `api_key`)
 - `base_url`
