@@ -15,8 +15,13 @@ def setup_logger(output_dir, log_file_suffix="log", overwrite=True):
     Returns:
         logging.Logger: Configured logger instance.
     """
+    # Create the log directory if it does not exist
+    if not os.path.exists("./Logs"):
+        os.makedirs("./Logs")
+
     # Derive the log file path
-    log_dir = output_dir.replace("Checkpoints", "Logs").replace(".json", f".{log_file_suffix}").replace(".pkl", f".{log_file_suffix}")
+    cur_folder_in_output_dir = os.path.basename(os.path.dirname(output_dir))
+    log_dir = output_dir.replace(cur_folder_in_output_dir, "Logs").replace(".json", f".{log_file_suffix}").replace(".pkl", f".{log_file_suffix}")
     log_folder = os.path.dirname(log_dir)
     os.makedirs(log_folder, exist_ok=True)
 

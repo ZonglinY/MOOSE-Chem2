@@ -1,4 +1,23 @@
-import json, pickle, random
+import json, pickle, random, os, sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+# Input:
+#   results_compare_collection: [[1/2, reason], ...]
+# Output:
+#   results_compare_collection_reverse: [[2/1, reason], ...]
+def postprocess_reverse_ordered_pairwise_comparison_results(results_compare_collection):
+    results_compare_collection_reverse = []
+    for cur_pairwise_rlt in results_compare_collection:
+        assert len(cur_pairwise_rlt) == 2
+        if cur_pairwise_rlt[0] == 1:
+            results_compare_collection_reverse.append([2, cur_pairwise_rlt[1].replace("1", "aopxsd").replace("2", "1").replace("aopxsd", "2")])
+        elif cur_pairwise_rlt[0] == 2:
+            results_compare_collection_reverse.append([1, cur_pairwise_rlt[1].replace("1", "aopxsd").replace("2", "1").replace("aopxsd", "2")])
+        else:
+            raise Exception(f"cur_pairwise_rlt[0] must be 1 or 2, got {cur_pairwise_rlt[0]}")
+    return results_compare_collection_reverse
+
 
 
 
@@ -7,14 +26,28 @@ import json, pickle, random
 # Input: 
 #   hypothesis_reasons: [[hyp, reason], [hyp, reason], ...]
 #   PairwiseCompare_object.compare(research_question, hypothesis1, hypothesis2, instruction_mode="same_hyp1_hyp2")
+#   hierarchy_level: [0, 4] or None
 # Output: the index of the best hypothesis
-def find_the_best_hypothesis_among_list(cur_q, cur_survey, hypothesis_reasons, PairwiseCompare_object):
+def find_the_best_hypothesis_among_list(cur_q, cur_survey, hypothesis_reasons, PairwiseCompare_object, hierarchy_level=None, num_compare_times=3):
     assert len(hypothesis_reasons) >= 1
+    assert hierarchy_level == None or (isinstance(hierarchy_level, int) and hierarchy_level >= 0 and hierarchy_level <= 4)
     best_id = 0
     for cur_id in range(1, len(hypothesis_reasons)):
-        # selection_reason: [selection (1/2), reason]
-        selection_reason = PairwiseCompare_object.compare(cur_q, hypothesis_reasons[best_id][0], hypothesis_reasons[cur_id][0], instruction_mode="same_hyp1_hyp2")
-        if selection_reason[0] == 2:
+        first_hyp = hypothesis_reasons[best_id][0]
+        second_hyp = hypothesis_reasons[cur_id][0]
+        # selection_reason: [[selection (1/2), reason]]
+        selection_reason = PairwiseCompare_object.compare(cur_q, first_hyp, second_hyp, instruction_mode="same_hyp1_hyp2", hierarchy_level=hierarchy_level, if_no_unified_response=True, num_compare_times=num_compare_times)
+        # selection_reason_reverse: [[selection (2/1), reason]]
+        selection_reason_reverse = PairwiseCompare_object.compare(cur_q, second_hyp, first_hyp, instruction_mode="same_hyp1_hyp2", hierarchy_level=hierarchy_level, if_no_unified_response=True, num_compare_times=num_compare_times)
+        # selection_reason_reverse_reverse_back: [[selection (1/2), reason]]
+        selection_reason_reverse_reverse_back = postprocess_reverse_ordered_pairwise_comparison_results(selection_reason_reverse)
+        # final_selection: [[selection (1/2), reason]]
+        final_selection = selection_reason + selection_reason_reverse_reverse_back
+        # final_selection: [selection (1/2), selection (1/2), ...]
+        final_selection = [cur_d[0] for cur_d in final_selection]
+        final_selection_average = sum(final_selection) / len(final_selection)
+        print("final_selection_average: ", final_selection_average)
+        if final_selection_average > 1.5:
             best_id = cur_id
     return best_id
 
@@ -256,6 +289,18 @@ class HGTree:
         for child_node in node.children:
             child_node.set_parent(node)
 
+    def to_tree_dict(self):
+        return self._node_to_dict(self.root)
+
+    def _node_to_dict(self, node):
+        try:
+            hyp = node.full_generated_hyp[-1][-1][0] if node.full_generated_hyp else "[Empty]"
+        except:
+            hyp = "[Invalid structure]"
+        return {
+            "name": hyp,
+            "children": [self._node_to_dict(child) for child in node.children] if node.children else []
+        }
 
 
 
@@ -285,60 +330,3 @@ def get_all_previous_hierarchy_hypothesis_prompt(background_survey, input_cg_hyp
         raise ValueError("Invalid cur_hierarchy_id: ", cur_hierarchy_id)
     return cur_survey_with_additional_info
         
-
-
-
-
-
-# An old version of HierarchyGreedy.get_finegrained_hyp_for_one_research_question_Branching
-#   not using the tree search data structure but using lists; only one branch in each hierarchy
-
-    # # Function: get fine-grained hypothesis for one research question WITHOUT branching (one final hypothesis from one hierarchy)
-    # # Output
-    # # full_results_all_hierarchy: [search_results_all_init_hierarchy_0, search_results_all_init_hierarchy_1, ...]
-    # #   search_results_all_init_hierarchy_0: [search_results_init_0, search_results_init_1, ..., search_results_init_(num_init_for_EU), recombination_results_all_steps]
-    # #       search_results_init_x / recombination_results_all_steps: [[hyp, reason], [hyp, reason], ...]
-    # def get_finegrained_hyp_for_one_research_question_noBranching(self, cur_bkg_id):
-    #     # final results
-    #     full_results_all_hierarchy = []
-    #     ## we take a greedy approach between hierarchical levels
-    #     prev_hierarchy_gene_fg_hyp = None
-    #     for cur_hierarchy_id in range(self.args.num_hierarchy):
-    #         print("Hierarchy ID: ", cur_hierarchy_id)
-    #         # basic input information
-    #         cur_q = self.bkg_q_list[cur_bkg_id]
-    #         cur_survey = self.dict_bkg2survey[cur_q]
-    #         cur_cg_hyp = self.dict_bkg2cg_hyp[cur_q]
-    #         if cur_hierarchy_id == 0:
-    #             print("Initial coarse-grained hypothesis: ", cur_cg_hyp)
-    #         # initialize input_cg_hypothesis_prompt and all_previous_hierarchy_hypothesis_prompt
-    #         # input_cg_hypothesis_prompt
-    #         input_cg_hypothesis_prompt = "\n\nThe coarse-grained hypothesis is: {}\nThe coarse-grained hypothesis is proposed by a student and has not been verified by experiments. ".format(cur_cg_hyp) 
-    #         # all_previous_hierarchy_hypothesis_prompt
-    #         all_previous_hierarchy_hypothesis_prompt = "\n\nNext we introduce the best hypothesis we have found in each of the lower/previous hierarchies (which contain more general contents). When we make modifications to hypothesis in the current hierarchy, normally we should try to keep it consistent with the best hypotheses from the previous hierarchies (it is encouraged to maintain their general contents while adding details, instead of replacing the general contents with details), unless we have good reasons to change it. \n"
-    #         # len(full_results_all_hierarchy) might be less than cur_hierarchy_id, since some hierarchies might not lead to better hypothesis than the previous hierarchy
-    #         for cur_hierarchy_id_previous in range(len(full_results_all_hierarchy)):
-    #             all_previous_hierarchy_hypothesis_prompt += "The best hypothesis found in hierarchy ({}) is: {}\n".format(cur_hierarchy_id_previous, full_results_all_hierarchy[cur_hierarchy_id_previous][-1][-1][0])
-    #         # merge input_cg_hypothesis_prompt and/or all_previous_hierarchy_hypothesis_prompt into cur_survey
-    #         if cur_hierarchy_id == 0:
-    #             cur_survey += input_cg_hypothesis_prompt
-    #         elif cur_hierarchy_id > 0:
-    #             cur_survey += input_cg_hypothesis_prompt + all_previous_hierarchy_hypothesis_prompt
-    #         else:
-    #             raise ValueError("Invalid cur_hierarchy_id: ", cur_hierarchy_id)
-    #         # search over one hierarchy
-    #         search_results_all_init = self.search_over_one_hierarchy(cur_q, cur_survey, cur_cg_hyp, cur_hierarchy_id, prev_hierarchy_gene_fg_hyp)
-    #         if len(search_results_all_init) > 0:
-    #             full_results_all_hierarchy.append(search_results_all_init)
-    #             # update prev_hierarchy_gene_fg_hyp
-    #             prev_hierarchy_gene_fg_hyp = search_results_all_init[-1][-1][0]
-    #             print("current hyp: ", prev_hierarchy_gene_fg_hyp)
-    #         else:
-    #             # print("INFO: No better searched hypothesis for this hierarchy.")
-    #             # if the potential local minimum are all worse than the hypothesis from the previous hierarchy, then at least we have the hypothesis from the previous hierarchy, which can be used as the initial hypothesis for the next hierarchy
-    #             assert prev_hierarchy_gene_fg_hyp != None
-
-    #     # save the search results
-    #     if self.args.if_save == 1:
-    #         with open(self.args.output_dir, 'w') as f:
-    #             json.dump(full_results_all_hierarchy, f, indent=4)

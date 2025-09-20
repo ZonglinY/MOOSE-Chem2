@@ -2,6 +2,7 @@ import os, argparse, json, time, math, sys, re, builtins
 import numpy as np
 from openai import OpenAI, AzureOpenAI
 import concurrent.futures
+from google import genai
 sys.stdout.reconfigure(encoding='utf-8')
 # Add the project root to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,32 +20,58 @@ class HierarchyGreedy(object):
 
     def __init__(self, args):
         self.args = args
-        # set OpenAI API key
+        # Set API client
+        # openai client
         if args.api_type == 0:
             self.client = OpenAI(api_key=args.api_key, base_url=args.base_url)
+        # azure client
+        elif args.api_type == 1:
+            self.client = AzureOpenAI(
+                azure_endpoint = args.base_url, 
+                api_key=args.api_key,  
+                api_version="2024-06-01"
+            )
+        # google client
+        elif args.api_type == 2:
+            self.client = genai.Client(api_key=args.api_key)
         else:
             raise NotImplementedError
         # prepare pairwise comparison
         self.pairwise_compare = PairwiseCompare(args.api_type, args.eval_api_key, args.base_url, args.eval_model_name, if_multiple_llm=args.if_multiple_llm)
-        # obtain groundtruth finegrained hypothesis and experiment
-        self.bkg_q_list, self.dict_bkg2survey, self.dict_bkg2cg_hyp, self.dict_bkg2fg_hyp, self.dict_bkg2fg_exp, self.dict_bkg2note = load_chem_annotation(args.chem_annotation_path)
-        # update dict_bkg2cg_hyp with the vague cg hypothesis
-        if args.if_use_vague_cg_hyp_as_input == 1:
-            assert os.path.exists(args.vague_cg_hyp_path)
-            with open(args.vague_cg_hyp_path, "r") as f:
-                self.dict_bkg2cg_hyp = json.load(f)
+        # obtain groundtruth finegrained hypothesis and experiment from TOMATO-Chem2
+        if self.args.if_use_custom_research_background_and_coarse_hyp == 0:
+            self.bkg_q_list, self.dict_bkg2survey, self.dict_bkg2cg_hyp, self.dict_bkg2fg_hyp, self.dict_bkg2fg_exp, self.dict_bkg2note = load_chem_annotation(args.chem_annotation_path)
+            # update dict_bkg2cg_hyp with the vague cg hypothesis
+            if args.if_use_vague_cg_hyp_as_input == 1:
+                assert os.path.exists(args.vague_cg_hyp_path)
+                with open(args.vague_cg_hyp_path, "r") as f:
+                    self.dict_bkg2cg_hyp = json.load(f)
 
 
 
     # Function: get fine-grained hypothesis for one research question WITH branching (beam size of hypothesis from one hierarchy)
+    # Input
+    #   cur_bkg_id: >= 0
+    #   if_use_custom_research_background_and_coarse_hyp: 0 / 1
     # Output
     #   search_results_all_init: [search_results_init_0, search_results_init_1, ..., search_results_init_(num_init_for_EU), recombination_results_all_steps]
     #       search_results_init_0/1 / recombination_results_all_steps: [[hyp, reason], [hyp, reason], ...]
     def get_finegrained_hyp_for_one_research_question_Branching(self, cur_bkg_id):
         # basic input information
-        research_question = self.bkg_q_list[cur_bkg_id]
-        background_survey = self.dict_bkg2survey[research_question]
-        input_cg_hyp = self.dict_bkg2cg_hyp[research_question]
+        if self.args.if_use_custom_research_background_and_coarse_hyp == 0:
+            print("Loading data from TOMATA-Chem2 dataset...")
+            research_question = self.bkg_q_list[cur_bkg_id]
+            background_survey = self.dict_bkg2survey[research_question]
+            input_cg_hyp = self.dict_bkg2cg_hyp[research_question]
+        elif self.args.if_use_custom_research_background_and_coarse_hyp == 1:
+            print("Loading data from custom research background...")
+            # use the custom research background and coarse-grained hypothesis
+            # custom_data: [[research_question, background_survey, input_cg_hyp], ...]
+            with open(self.args.custom_research_background_and_coarse_hyp_path, "r") as f:
+                custom_data = json.load(f)
+                research_question, background_survey, input_cg_hyp = custom_data[cur_bkg_id]
+        else:
+            raise ValueError("Invalid cur_bkg_id: ", cur_bkg_id)
         print("Initial coarse-grained hypothesis: ", input_cg_hyp)
 
         # initialize the tree
@@ -92,11 +119,38 @@ class HierarchyGreedy(object):
                         )
                         for cur_beam_id, cur_hyp_collection_in_topk in enumerate(topk_hypothesis)
                     ]
-                    for future in concurrent.futures.as_completed(futures):
+                    ## previous code, might not stop when KeyboardInterrupt
+                    # for future in concurrent.futures.as_completed(futures):
+                    #     try:
+                    #         future.result()
+                    #     except Exception as e:
+                    #         print(f"Error in parallel task: {e}")
+                    while futures:
                         try:
-                            future.result()
-                        except Exception as e:
-                            print(f"Error in parallel task: {e}")
+                            # 使用短超时检查完成的任务
+                            done_futures = []
+                            for future in list(futures):
+                                try:
+                                    future.result(timeout=2.0)
+                                    done_futures.append(future)
+                                except concurrent.futures.TimeoutError:
+                                    continue
+                                except Exception as e:
+                                    print(f"Error in parallel task: {e}")
+                                    done_futures.append(future)
+                            
+                            # 移除已完成的任务
+                            for future in done_futures:
+                                futures.remove(future)
+                                
+                            if not done_futures:
+                                time.sleep(0.5)  # 短暂休息，允许KeyboardInterrupt
+                                
+                        except KeyboardInterrupt:
+                            print("检测到中断信号，取消剩余任务...")
+                            for future in futures:
+                                future.cancel()
+                            raise
             else:
                 for cur_beam_id, cur_hyp_collection_in_topk in enumerate(topk_hypothesis):
                     self.process_each_branch(cur_beam_id, cur_hyp_collection_in_topk, cur_hierarchy_id, hgtree, background_survey, input_cg_hyp, research_question)
@@ -179,14 +233,41 @@ class HierarchyGreedy(object):
                     )
                     for cur_init_id in range(self.args.num_init_for_EU)
                 ]
-                # Collect results as they complete
-                for future in concurrent.futures.as_completed(futures):
+                ## previous code, might not stop when KeyboardInterrupt
+                # # Collect results as they complete
+                # for future in concurrent.futures.as_completed(futures):
+                #     try:
+                #         cur_init_search_results = future.result()
+                #         if len(cur_init_search_results) > 0:
+                #             search_results_all_init.append(cur_init_search_results)
+                #     except Exception as e:
+                #         print(f"Error in processing: {e}")
+                while futures:
                     try:
-                        cur_init_search_results = future.result()
-                        if len(cur_init_search_results) > 0:
-                            search_results_all_init.append(cur_init_search_results)
-                    except Exception as e:
-                        print(f"Error in processing: {e}")
+                        done_futures = []
+                        for future in list(futures):
+                            try:
+                                cur_init_search_results = future.result(timeout=2.0)
+                                if len(cur_init_search_results) > 0:
+                                    search_results_all_init.append(cur_init_search_results)
+                                done_futures.append(future)
+                            except concurrent.futures.TimeoutError:
+                                continue
+                            except Exception as e:
+                                print(f"Error in processing: {e}")
+                                done_futures.append(future)
+                        
+                        for future in done_futures:
+                            futures.remove(future)
+                            
+                        if not done_futures:
+                            time.sleep(0.5)
+                            
+                    except KeyboardInterrupt:
+                        print("检测到中断信号，取消剩余任务...")
+                        for future in futures:
+                            future.cancel()
+                        raise
         else:
             for cur_init_id in range(self.args.num_init_for_EU):
                 print("\t\tInitial point ID: ", cur_init_id)
@@ -239,7 +320,10 @@ class HierarchyGreedy(object):
         # the local minimums of each initial point: local_minimums: [[hyp, reason], [hyp, reason], ...]
         local_minimums = [cur_init_search_results[-1] for cur_init_search_results in search_results_all_init]
         # rank the local minimums
-        best_local_minimum_id = find_the_best_hypothesis_among_list(cur_q, cur_survey, local_minimums, self.pairwise_compare)
+        hierarchy_level = cur_hierarchy_id if self.args.num_hierarchy > 1 else None
+        # use 5 num_compare_times to ensure the best hypothesis is selected
+        best_local_minimum_id = find_the_best_hypothesis_among_list(cur_q, cur_survey, local_minimums, self.pairwise_compare, hierarchy_level=hierarchy_level, num_compare_times=5)
+        assert isinstance(local_minimums[best_local_minimum_id], list), f"Expected list, got: {type(local_minimums[best_local_minimum_id])}, value: {local_minimums[best_local_minimum_id]}"
         best_local_minimum_hyp = local_minimums[best_local_minimum_id][0]
         # turn local_minimums into prompt
         local_minimums_prompt = "\nNext research hypothesis candidate: ".join([local_minimum[0] for local_minimum in local_minimums])
@@ -275,7 +359,7 @@ class HierarchyGreedy(object):
         prev_step_gene_fg_hyp = None
         for cur_search_step_id in range(self.args.max_search_step):
             # print("\t\t\tSearch step ID: ", cur_search_step_id)
-            print(f"cur_hierarchy_id: {cur_hierarchy_id}, cur_branch_id: {cur_branch_id}, cur_init_id: {cur_init_id}, cur_search_step_id: {cur_search_step_id}")
+            print(f"cur_hierarchy_id: {cur_hierarchy_id}, cur_branch_id: {cur_branch_id}, cur_init_id: {cur_init_id}, cur_search_step_id: {cur_search_step_id}, prompt_type: {prompt_type}")
             structured_gene, selection_reason, if_continue_search = self.one_step_greedy_search_strictly_better_than_previous(cur_q, cur_survey, cur_cg_hyp, cur_hierarchy_id, cur_init_id, prev_hierarchy_gene_fg_hyp, prev_step_gene_fg_hyp, cur_search_step_id, self.args.locam_minimum_threshold, prompt_type=prompt_type)
             # local minimum detection
             if if_continue_search == False:
@@ -307,7 +391,21 @@ class HierarchyGreedy(object):
         if_better=False
         cnt_search_single_step=0
         if_continue_search=True
+        # past_failed_hyp: [[hypothesis, reason], ...]
+        if self.args.if_generate_with_past_failed_hyp == 1:
+            past_failed_hyp = []
+            # back up the original survey to advoid add the same past failed hypothesis to the survey multiple times
+            cur_survey_ori = cur_survey
         while not if_better:
+            # add past failed hypothesis to the survey to mimic in-context RL
+            if self.args.if_generate_with_past_failed_hyp == 1:
+                if len(past_failed_hyp) > 0:
+                    prompt_past_failed_hyp = ""
+                    for i in range(len(past_failed_hyp)):
+                        prompt_past_failed_hyp += "The {}th previous hypothesis that is not better than the base hypothesis is: ".format(i+1) + past_failed_hyp[i][0] + "\n" + "The reason is: " + past_failed_hyp[i][1] + "\n"
+                    prompt_past_failed_hyp += "\nBelow are some previous updated hypotheses that are not better than the base hypothesis and the corresponding reasons (The reason might mention Research hypothesis candidate 1 and Research hypothesis candidate 2. Out of them, Research hypothesis candidate 1 is the base hypothesis, and Research hypothesis candidate 2 is the not better updated hypothesis), you may be aware of them: " + prompt_past_failed_hyp
+                    cur_survey = cur_survey_ori + prompt_past_failed_hyp
+                    print("Added past failed hypothesis to the survey to mimic in-context RL")
             # structured_gene: [hypothesis, reason]
             if self.args.if_feedback == 1:
                 structured_gene = self.one_step_greedy_search_with_feedback(cur_q, cur_survey, cur_cg_hyp, cur_hierarchy_id, cur_init_id, prev_hierarchy_gene_fg_hyp, this_hierarchy_prev_step_gene_fg_hyp, prompt_type)
@@ -316,7 +414,9 @@ class HierarchyGreedy(object):
             print("\t\t\t\tcurrent hyp: ", structured_gene[0])
             # selection_reason: [selection (1/2), reason]
             # when this_hierarchy_prev_step_gene_fg_hyp == None, the previous fine-grained hypothesis is not generated, thus use the coarse-grained hypothesis for comparison
-            selection_reason = self.pairwise_compare.compare(cur_q, prev_hyp_to_compare, structured_gene[0], instruction_mode="strict_to_hyp2", hierarchy_level=cur_hierarchy_id)
+            # cur_hierarchy_level is not None only when num_hierarchy > 1
+            cur_hierarchy_level = cur_hierarchy_id if self.args.num_hierarchy > 1 else None
+            selection_reason = self.pairwise_compare.compare(cur_q, prev_hyp_to_compare, structured_gene[0], instruction_mode="strict_to_hyp2", hierarchy_level=cur_hierarchy_level)
             if selection_reason[0] == 2:
                 # the new hypothesis is better
                 if_better=True
@@ -324,6 +424,9 @@ class HierarchyGreedy(object):
             else:
                 print("\t\t\t\tThe new hypothesis is not better than the previous one, try again... \n")
                 # print("The new hypothesis is not better than the previous one, try again... \nReason: {}".format(selection_reason[1]))
+                if self.args.if_generate_with_past_failed_hyp == 1:
+                    past_failed_hyp.append([structured_gene[0], selection_reason[1]])
+                    print("Collected past failed hypothesis to mimic in-context RL")
             cnt_search_single_step+=1
             if if_better == False and cnt_search_single_step >= locam_minimum_threshold:
                 if_continue_search=False
@@ -411,9 +514,9 @@ class HierarchyGreedy(object):
             # the first search step
             if prompt_type == 'normal_search':
                 if self.args.num_hierarchy == 5:
-                    prompts = instruction_prompts("hierarchy_greedy_search_five_hierarchy_first_step", assist_info=[cur_hierarchy_id])
+                    prompts = instruction_prompts("hierarchy_greedy_search_five_hierarchy_first_step", assist_info=[cur_hierarchy_id, self.args.if_generate_with_example])
                 elif self.args.num_hierarchy == 1:
-                    prompts = instruction_prompts("greedy_search_first_step", assist_info=[cur_hierarchy_id])
+                    prompts = instruction_prompts("greedy_search_first_step", assist_info=[cur_hierarchy_id, self.args.if_generate_with_example])
                 else:
                     raise ValueError("Invalid num_hierarchy: ", self.args.num_hierarchy)
                 assert len(prompts) == 3
@@ -430,9 +533,9 @@ class HierarchyGreedy(object):
             # the following search steps (with previous search results)
             if prompt_type == 'normal_search':
                 if self.args.num_hierarchy == 5:
-                    prompts = instruction_prompts("hierarchy_greedy_search_five_hierarchy_following_step", assist_info=[cur_hierarchy_id])
+                    prompts = instruction_prompts("hierarchy_greedy_search_five_hierarchy_following_step", assist_info=[cur_hierarchy_id, self.args.if_generate_with_example])
                 elif self.args.num_hierarchy == 1:
-                    prompts = instruction_prompts("greedy_search_following_step", assist_info=[cur_hierarchy_id])
+                    prompts = instruction_prompts("greedy_search_following_step", assist_info=[cur_hierarchy_id, self.args.if_generate_with_example])
                 else:
                     raise ValueError("Invalid num_hierarchy: ", self.args.num_hierarchy)
                 assert len(prompts) == 4
@@ -468,12 +571,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Greedy search for fine-grained hypothesis generation')
     parser.add_argument("--model_name", type=str, default="gpt-4o", help="model name: gpt-4o/chatgpt/chatgpt16k/claude35S/gemini15P/llama318b/llama3170b/llama31405b")
     parser.add_argument("--eval_model_name", type=str, default="gpt-4o", help="model name for evaluation: gpt-4o/chatgpt/chatgpt16k/claude35S/gemini15P/llama318b/llama3170b/llama31405b")
-    parser.add_argument("--api_type", type=int, default=0, help="0: claude shop; 1: azure")
+    parser.add_argument("--api_type", type=int, default=0, help="0: openai's API toolkit; 1: azure's API toolkit")
     parser.add_argument("--api_key", type=str, default="")
     parser.add_argument("--eval_api_key", type=str, default="")
-    parser.add_argument("--base_url", type=str, default="https://api.claudeshop.top/v1", help="base url for the API")
+    parser.add_argument("--base_url", type=str, default="", help="base url for the API")
     parser.add_argument("--chem_annotation_path", type=str, default="./Data/chem_research_2024_finegrained.xlsx", help="store annotated background research questions and their annotated groundtruth inspiration paper titles")
-    parser.add_argument("--bkg_id", type=int, default=0, help="background research question id")
+    parser.add_argument("--bkg_id", type=int, default=0, help="background research question id; can be the id for both TOMATO-Chem2 and custom inputs; 0~N: use the N-th background research question in the chem_annotation_path or custom_research_background_and_coarse_hyp_path")
     parser.add_argument("--output_dir", type=str, default="./Checkpoints/hypothesis_evaluation_results.json")
     parser.add_argument("--if_save", type=int, default=0, help="whether save grouping results")
     parser.add_argument("--max_search_step", type=int, default=60, help="maximum search steps")
@@ -488,6 +591,10 @@ if __name__ == "__main__":
     parser.add_argument("--if_multiple_llm", type=int, default=0, help="whether to use multiple llms for hypothesis gradient estimation. 0: single llm; 1: multiple same llms; 2: multiple different llms")
     parser.add_argument("--if_use_vague_cg_hyp_as_input", type=int, default=0, help="whether to use processed vague coarse-grained hypothesis as input (by Data_Processing/input_hyp_processing.py)")
     parser.add_argument("--vague_cg_hyp_path", type=str, default="./Data/processed_research_direction.json", help="store processed vague coarse-grained hypothesis")
+    parser.add_argument("--if_generate_with_example", type=int, default=1, help="during optimization, whether to use hypothesis example in the prompt to generate hypothesis in each step")
+    parser.add_argument("--if_generate_with_past_failed_hyp", type=int, default=0, help="during optimization, whether to use past failed hypothesis in the prompt to generate hypothesis in each step")
+    parser.add_argument("--if_use_custom_research_background_and_coarse_hyp", type=int, default=0, help="whether to use custom research question & background survey & coarse-grained hypothesis; 0: use the background research question in the chem_annotation_path; 1: use custom research question in custom_research_background_and_coarse_hyp_path")
+    parser.add_argument("--custom_research_background_and_coarse_hyp_path", type=str, default="./custom_research_background_and_coarse_hyp.json", help="if bkg_id == -1, then use this path to load custom research question and background survey and coarse-grained hypothesis; in a format of json file, with keys: 'research_question', 'background_survey', 'coarse_grained_hypothesis'; if bkg_id != -1, then this path will be ignored")
     args = parser.parse_args()
 
     assert args.if_save in [0, 1]
@@ -498,6 +605,10 @@ if __name__ == "__main__":
     assert args.if_parallel in [0, 1]
     assert args.if_multiple_llm in [0, 1, 2]
     assert args.if_use_vague_cg_hyp_as_input in [0, 1]
+    # we need if_generate_with_example to be 1
+    assert args.if_generate_with_example in [1]
+    assert args.if_generate_with_past_failed_hyp in [0, 1]
+    assert args.if_use_custom_research_background_and_coarse_hyp in [0, 1]
 
     ## Setup logger
     logger = setup_logger(args.output_dir)
@@ -510,6 +621,17 @@ if __name__ == "__main__":
     builtins.print = custom_print
     print(args)
 
+    ## if use custom research question & background survey & coarse-grained hypothesis   
+    if args.if_use_custom_research_background_and_coarse_hyp == 0:
+        assert args.chem_annotation_path != ""
+        assert os.path.exists(args.chem_annotation_path)
+    elif args.if_use_custom_research_background_and_coarse_hyp == 1:
+        assert args.custom_research_background_and_coarse_hyp_path != ""
+        assert os.path.exists(args.custom_research_background_and_coarse_hyp_path)
+    else:
+        raise ValueError("Invalid if_use_custom_research_background_and_coarse_hyp: ", args.if_use_custom_research_background_and_coarse_hyp)
+
+    ## start running the framework
     if os.path.exists(args.output_dir):
         print("Warning: {} already exists.".format(args.output_dir))
     else:
