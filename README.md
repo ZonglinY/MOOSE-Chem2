@@ -5,11 +5,9 @@
 [![arXiv](https://img.shields.io/badge/arXiv-b31b1b.svg)](https://arxiv.org/abs/2505.19209)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Overview
-
 MOOSE-Chem2 introduces the task of *fine-grained scientific hypothesis discovery*—enabling LLMs to move beyond vague ideas toward **detailed hypotheses with sufficient methodological specifics for lab testing**.
 
-This repository includes the dataset, method implementation, and analysis scripts for MOOSE-Chem2.
+This repository includes the dataset, method implementation, and analysis scripts for MOOSE-Chem2. It also can be used in a copilot setting where it takes in customized research question.
 
 ---
 
