@@ -9,6 +9,10 @@ MOOSE-Chem2 introduces the task of *fine-grained scientific hypothesis discovery
 
 This repository includes the dataset, method implementation, and analysis scripts for MOOSE-Chem2. It also can be used in a copilot setting where it takes in customized research question.
 
+<p align="center" width="100%">
+  <img src="./Figure/MC2_intro.png" alt="MOOSE-Chem2" style="width: 75%; display: block; margin: auto;"></a>
+</p>
+
 ---
 
 ### 🛠️ Step 0: Set Up the Python Environment
