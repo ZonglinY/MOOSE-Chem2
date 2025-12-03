@@ -271,7 +271,7 @@ If you found this repository useful, please consider 📑citing:
       author    = {Yang, Zonglin and Liu, Wanhao and Gao, Ben and Liu, Yujie and Li, Wei and Xie, Tong and Bing, Lidong and Ouyang, Wanli and Cambria, Erik and Zhou, Dongzhan},
       booktitle = {Advances in Neural Information Processing Systems},
       year      = {2025}
-   }
+   	}
 
 
 ---
@@ -279,6 +279,7 @@ If you found this repository useful, please consider 📑citing:
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](./LICENSE) file for details.
+
 
 
 
