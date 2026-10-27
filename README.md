@@ -110,6 +110,40 @@ bash main.sh
 
 > ⚠️ This step may take up to **400 minutes per input bkg_id**.
 
+#### Resume an interrupted hierarchical search
+
+Add `--checkpoint Checkpoints/search.sqlite3 --seed 17` to the
+`python Method/hierarchy_greedy.py` command in `main.sh` before starting a new
+search. After an interruption, rerun the same command with `--resume` added.
+Use a separate checkpoint path for each research question/configuration.
+
+The SQLite journal commits each complete OpenAI, Azure OpenAI or Gemini response
+before text extraction. Resume reconstructs the search by replaying saved responses
+and sends requests without a committed response again. Identical prompts sampled
+in different branches or repeated calls retain separate responses. In checkpoint
+mode, parallel initialization results and tree branches use submission order so
+thread timing cannot change subsequent prompts. Local candidate shuffling uses
+`--seed`; model sampling parameters remain unchanged.
+
+Keep the input files, arguments, source code and dependencies unchanged when
+resuming. These are validated before replay; API keys can be replaced and are
+excluded from checkpoint metadata and argument logs. A process lock prevents two
+searches from using the same journal. Resume appends to the existing log and
+rebuilds the final tree, including an output interrupted during its write.
+
+This opt-in mode requires a Unix-like system and a checkpoint created at the start
+of the run. A response received by the server but not committed locally must be
+requested again. After SDK retries are exhausted, API errors stop the checkpointed
+search so it can be resumed, instead of being swallowed by extraction retries or
+parallel search handlers. Without `--checkpoint`, existing execution behavior is
+preserved.
+
+Offline verification (no API credentials required):
+
+```bash
+python -m unittest discover -s tests -v
+```
+
 ---
 
 ### 📊 Step 5: Display Results

@@ -10,6 +10,7 @@ from Method.utils import load_chem_annotation, instruction_prompts, llm_generati
 from Evaluation.pairwise_compare import PairwiseCompare
 from Method.logging_utils import setup_logger
 from Method.hierarchy_greedy_utils import HGNode, HGTree
+from Method.checkpoint import ReplayExecutor, checkpoint_active, checkpoint_run
 from Method.hierarchy_greedy_utils import get_all_previous_hierarchy_hypothesis_prompt, find_the_best_hypothesis_among_list
 
 
@@ -105,7 +106,7 @@ class HierarchyGreedy(object):
             # cur_hyp_collection_in_topk: [hyp, reason, node]
             # Parallelize the loop using ThreadPoolExecutor
             if self.args.if_parallel == 1:
-                with concurrent.futures.ThreadPoolExecutor() as executor:
+                with ReplayExecutor() as executor:
                     futures = [
                         executor.submit(
                             self.process_each_branch,
@@ -136,6 +137,8 @@ class HierarchyGreedy(object):
                                 except concurrent.futures.TimeoutError:
                                     continue
                                 except Exception as e:
+                                    if checkpoint_active():
+                                        raise
                                     print(f"Error in parallel task: {e}")
                                     done_futures.append(future)
                             
@@ -155,6 +158,10 @@ class HierarchyGreedy(object):
                 for cur_beam_id, cur_hyp_collection_in_topk in enumerate(topk_hypothesis):
                     self.process_each_branch(cur_beam_id, cur_hyp_collection_in_topk, cur_hierarchy_id, hgtree, background_survey, input_cg_hyp, research_question)
 
+            if checkpoint_active():
+                for parent in {id(item[2]): item[2] for item in topk_hypothesis}.values():
+                    parent.children.sort(key=lambda node: node.branch_id)
+
         ## save the search tree results after finishing all hierarchies (since if the file already exists, this code will skip this bkg_id: the file is there only when the search is completed)
         if self.args.if_save == 1:
             hgtree.save(self.args.output_dir)
@@ -169,6 +176,8 @@ class HierarchyGreedy(object):
         print("\tDeveloping based on the hypothesis: ", cur_hyp_collection_in_topk[0])
         ## initialize cur_search_node
         cur_search_node = HGNode(hierarchy_id=cur_hierarchy_id, base_hyp_reason=cur_hyp_collection_in_topk[:2])
+        if checkpoint_active():
+            cur_search_node.branch_id = cur_beam_id
         ## get cur_survey_with_additional_info, which contains the corresponding best hypothesis from all the previous hierarchies of this top; we need it to enter the hypothesis search phase
         if cur_hierarchy_id == 0:
             # get parent node
@@ -217,7 +226,7 @@ class HierarchyGreedy(object):
 
         ## Parallelize the above loop using ThreadPoolExecutor
         if self.args.if_parallel == 1:
-            with concurrent.futures.ThreadPoolExecutor() as executor:  # Use ProcessPoolExecutor if it's CPU-bound
+            with ReplayExecutor() as executor:  # Use ProcessPoolExecutor if it's CPU-bound
                 # Submit tasks for each initialization ID
                 futures = [
                     executor.submit(
@@ -242,18 +251,21 @@ class HierarchyGreedy(object):
                 #             search_results_all_init.append(cur_init_search_results)
                 #     except Exception as e:
                 #         print(f"Error in processing: {e}")
+                submitted = list(futures)
                 while futures:
                     try:
                         done_futures = []
                         for future in list(futures):
                             try:
                                 cur_init_search_results = future.result(timeout=2.0)
-                                if len(cur_init_search_results) > 0:
+                                if not checkpoint_active() and len(cur_init_search_results) > 0:
                                     search_results_all_init.append(cur_init_search_results)
                                 done_futures.append(future)
                             except concurrent.futures.TimeoutError:
                                 continue
                             except Exception as e:
+                                if checkpoint_active():
+                                    raise
                                 print(f"Error in processing: {e}")
                                 done_futures.append(future)
                         
@@ -268,6 +280,8 @@ class HierarchyGreedy(object):
                         for future in futures:
                             future.cancel()
                         raise
+                if checkpoint_active():
+                    search_results_all_init = [f.result() for f in submitted if f.result()]
         else:
             for cur_init_id in range(self.args.num_init_for_EU):
                 print("\t\tInitial point ID: ", cur_init_id)
@@ -595,6 +609,9 @@ if __name__ == "__main__":
     parser.add_argument("--if_generate_with_past_failed_hyp", type=int, default=0, help="during optimization, whether to use past failed hypothesis in the prompt to generate hypothesis in each step")
     parser.add_argument("--if_use_custom_research_background_and_coarse_hyp", type=int, default=0, help="whether to use custom research question & background survey & coarse-grained hypothesis; 0: use the background research question in the chem_annotation_path; 1: use custom research question in custom_research_background_and_coarse_hyp_path")
     parser.add_argument("--custom_research_background_and_coarse_hyp_path", type=str, default="./custom_research_background_and_coarse_hyp.json", help="if bkg_id == -1, then use this path to load custom research question and background survey and coarse-grained hypothesis; in a format of json file, with keys: 'research_question', 'background_survey', 'coarse_grained_hypothesis'; if bkg_id != -1, then this path will be ignored")
+    parser.add_argument("--checkpoint", help="SQLite journal path for request-level resume")
+    parser.add_argument("--resume", action="store_true", help="Replay an existing request journal")
+    parser.add_argument("--seed", type=int, default=0, help="Local random seed for checkpointed searches")
     args = parser.parse_args()
 
     assert args.if_save in [0, 1]
@@ -610,36 +627,37 @@ if __name__ == "__main__":
     assert args.if_generate_with_past_failed_hyp in [0, 1]
     assert args.if_use_custom_research_background_and_coarse_hyp in [0, 1]
 
-    ## Setup logger
-    logger = setup_logger(args.output_dir)
-    # Redirect print to logger
-    def custom_print(*args, **kwargs):
-        message = " ".join(map(str, args))
-        logger.info(message)
-    # global print
-    # print = custom_print
-    builtins.print = custom_print
-    print(args)
+    with checkpoint_run(args):
+        ## Setup logger
+        logger = setup_logger(args.output_dir, overwrite=not args.resume)
+        # Redirect print to logger
+        def custom_print(*args, **kwargs):
+            message = " ".join(map(str, args))
+            logger.info(message)
+        # global print
+        # print = custom_print
+        builtins.print = custom_print
+        print({k: v for k, v in vars(args).items() if k not in {"api_key", "eval_api_key"}})
 
-    ## if use custom research question & background survey & coarse-grained hypothesis   
-    if args.if_use_custom_research_background_and_coarse_hyp == 0:
-        assert args.chem_annotation_path != ""
-        assert os.path.exists(args.chem_annotation_path)
-    elif args.if_use_custom_research_background_and_coarse_hyp == 1:
-        assert args.custom_research_background_and_coarse_hyp_path != ""
-        assert os.path.exists(args.custom_research_background_and_coarse_hyp_path)
-    else:
-        raise ValueError("Invalid if_use_custom_research_background_and_coarse_hyp: ", args.if_use_custom_research_background_and_coarse_hyp)
+        ## if use custom research question & background survey & coarse-grained hypothesis
+        if args.if_use_custom_research_background_and_coarse_hyp == 0:
+            assert args.chem_annotation_path != ""
+            assert os.path.exists(args.chem_annotation_path)
+        elif args.if_use_custom_research_background_and_coarse_hyp == 1:
+            assert args.custom_research_background_and_coarse_hyp_path != ""
+            assert os.path.exists(args.custom_research_background_and_coarse_hyp_path)
+        else:
+            raise ValueError("Invalid if_use_custom_research_background_and_coarse_hyp: ", args.if_use_custom_research_background_and_coarse_hyp)
 
-    ## start running the framework
-    if os.path.exists(args.output_dir):
-        print("Warning: {} already exists.".format(args.output_dir))
-    else:
-        ## start hierarchical greedy search
-        print(f"Start hierarchical greedy search... num_hierarchy: {args.num_hierarchy}")
-        start_time = time.time()
-        greedy = HierarchyGreedy(args)
-        # get fine-grained hypothesis for one research question
-        greedy.get_finegrained_hyp_for_one_research_question_Branching(args.bkg_id)
-        duration = (time.time() - start_time) / 60
-        print("Finished hierarchical greedy search. Duration: {:.2f} minutes".format(duration))
+        ## start running the framework
+        if os.path.exists(args.output_dir) and not args.resume:
+            print("Warning: {} already exists.".format(args.output_dir))
+        else:
+            ## start hierarchical greedy search
+            print(f"Start hierarchical greedy search... num_hierarchy: {args.num_hierarchy}")
+            start_time = time.time()
+            greedy = HierarchyGreedy(args)
+            # get fine-grained hypothesis for one research question
+            greedy.get_finegrained_hyp_for_one_research_question_Branching(args.bkg_id)
+            duration = (time.time() - start_time) / 60
+            print("Finished hierarchical greedy search. Duration: {:.2f} minutes".format(duration))

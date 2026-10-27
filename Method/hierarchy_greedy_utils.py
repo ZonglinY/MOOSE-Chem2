@@ -1,5 +1,6 @@
 import json, pickle, random, os, sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from Method.checkpoint import shuffle_candidates
 
 
 # Input:
@@ -227,7 +228,7 @@ class HGTree:
             # all_considered_hyp_candidates: [[hyp, reason, node], [hyp, reason, node], ...]
             all_considered_hyp_candidates = all_recomb_hyp_candidates + all_best_local_minimum_hyp_candidates
             # the order might be unfair, we shuffle it to avoid overly in favor of all_recomb_hyp_candidates or all_best_local_minimum_hyp_candidates
-            random.shuffle(all_considered_hyp_candidates)
+            shuffle_candidates(all_considered_hyp_candidates)
             if len(all_considered_hyp_candidates) == 0:
                 assert len(topk_hypothesis) == 0, print("topk_hypothesis: ", topk_hypothesis)
                 # topk_hypothesis: only an empty list []

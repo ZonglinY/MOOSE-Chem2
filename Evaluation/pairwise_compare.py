@@ -5,6 +5,7 @@ from google import genai
 import concurrent.futures
 # Add the project root to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from Method.checkpoint import ReplayExecutor
 from Method.utils import evaluation_instruction_prompts, llm_generation_while_loop, exchange_order_in_list
 
 class PairwiseCompare(object):
@@ -58,7 +59,7 @@ class PairwiseCompare(object):
                 if not num_compare_times > 1:
                     print(f"Warning: if_no_unified_response is set to True, but num_compare_times is not greater than 1: {num_compare_times}")
                 eval_models = [self.model_name for i in range(num_compare_times)]
-                with concurrent.futures.ThreadPoolExecutor() as executor:
+                with ReplayExecutor() as executor:
                     llm_response_collection = list(executor.map(get_llm_response, eval_models))
                 return llm_response_collection
             else:
@@ -90,7 +91,7 @@ class PairwiseCompare(object):
                 raise ValueError("Wrong if_multiple_llm value: ", self.if_multiple_llm)
             print("eval_models: ", eval_models)
             # print("starting pairwise compare in parallel...")
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            with ReplayExecutor() as executor:
                 llm_response_collection = list(executor.map(get_llm_response, eval_models))
             # print("ended pairwise compare in parallel...")
             # directly reply the three responses without unifying the response
