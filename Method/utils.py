@@ -1,7 +1,9 @@
 import os, re, json, random, time, math, sys
 import pandas as pd
 from google.genai import types
+from openai.types.chat import ChatCompletion
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from Method.checkpoint import api_response
 from Method.discipline_specific_prompt_chemistry import hyp_example_hierarchy_1, hyp_example_hierarchy_2, hyp_example_hierarchy_3, hyp_example_hierarchy_4, hyp_example_hierarchy_5, DISCIPLINE, INTRODUCTION_OF_HIERARCHIES, HIERARCHY_LIST, DESCRIPTION_HIERARCHY_LIST, FEEDBACK_HIERARCHY_VALIDITY_CLARITY, FEEDBACK_NON_HIERARCHY_VALIDITY_CLARITY, EXAMPLE_DESCRIPTION_FINAL_HYPOTHESIS, EXAMPLE_UPDATE_NEW_HIERARCHY
 # from Method.discipline_specific_prompt_geophysics import hyp_example_hierarchy_1, hyp_example_hierarchy_2, hyp_example_hierarchy_3, hyp_example_hierarchy_4, hyp_example_hierarchy_5, DISCIPLINE, INTRODUCTION_OF_HIERARCHIES, HIERARCHY_LIST, DESCRIPTION_HIERARCHY_LIST, FEEDBACK_HIERARCHY_VALIDITY_CLARITY, FEEDBACK_NON_HIERARCHY_VALIDITY_CLARITY, EXAMPLE_DESCRIPTION_FINAL_HYPOTHESIS, EXAMPLE_UPDATE_NEW_HIERARCHY
 
@@ -123,7 +125,7 @@ def llm_generation(prompt, model_name, client, temperature=1.0, api_type=0):
     for cur_trial in range(cnt_max_trials):
         try:
             if api_type in [0, 1]:
-                completion = client.chat.completions.create(
+                request = dict(
                 model=model_name,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -132,16 +134,22 @@ def llm_generation(prompt, model_name, client, temperature=1.0, api_type=0):
                     {"role": "user", "content": prompt}
                     ]
                 )
+                completion = api_response(
+                    "openai", {"endpoint": str(client.base_url), **request},
+                    lambda: client.chat.completions.create(**request), ChatCompletion)
                 generation = completion.choices[0].message.content.strip()
             # google client
             elif api_type == 2:
-                response = client.models.generate_content(
+                request = dict(
                     model=model_name, 
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         thinking_config=types.ThinkingConfig(thinking_budget=0)
                     )
                 )
+                response = api_response(
+                    "google", {**request, "config": request["config"].model_dump(mode="json")},
+                    lambda: client.models.generate_content(**request), types.GenerateContentResponse)
                 generation = response.text.strip()
             else:
                 raise NotImplementedError
