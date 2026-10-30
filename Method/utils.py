@@ -600,6 +600,9 @@ def llm_generation_with_extraction(prompt, model_name, client, expected_fields=N
             raise ValueError(f"Unsupported expected_type '{expected_type}' for field '{field_name}'. "
                            f"Supported types: 'text', 'number', 'yes_no' (or 'bool'/'boolean')")
     
+    if max_retries < 1:
+        raise ValueError("max_retries must be at least 1")
+
     # Try extraction with retries
     for attempt in range(max_retries):
         try:
@@ -623,22 +626,18 @@ def llm_generation_with_extraction(prompt, model_name, client, expected_fields=N
             if all_fields_extracted:
                 return extracted
             
-            # If this was the last attempt, return what we got
-            if attempt == max_retries - 1:
-                print(f"Warning: Some fields could not be extracted after {max_retries} attempts.")
-                return extracted
-            
             # Otherwise, retry with slightly higher temperature
             temperature = min(temperature + 0.1, 1.5)
             
         except Exception as e:
             print(f"Error during extraction attempt {attempt + 1}: {e}")
             if attempt == max_retries - 1:
-                # On final attempt, return empty dict for all fields
-                return {field_name: None for field_name, _ in expected_fields}
-    
-    # Should not reach here, but return empty dict as fallback
-    return {field_name: None for field_name, _ in expected_fields}
+                raise ValueError(f"Structured extraction failed after {max_retries} attempts") from e
+
+    missing_fields = [name for name, kind in expected_fields
+                      if extracted[name] is None or (kind == 'text' and extracted[name] == "")]
+    raise ValueError(f"Structured extraction failed after {max_retries} attempts; "
+                     f"missing fields: {', '.join(missing_fields)}")
 
 
 # =============================================================================
